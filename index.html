@@ -561,56 +561,85 @@ const handleLogout = async () => {
 // Part 3: Score Saving, Analytics & Achievements
 
       const saveScore = async () => {
-        if (!amScore || !pmScore || !wordleScore) {
-          alert('Please fill in all scores');
+  // Validate that at least one score is provided
+  if (!amScore && !pmScore && !wordleScore) {
+    alert('Please fill in at least one score');
+    return;
+  }
+  
+  setLoading(true);
+
+  try {
+    const db = window.firebase.firestore();
+    const selectedDate = new Date(entryDate + 'T12:00:00');
+    
+    // Check if entry already exists for this date
+    const existingScores = await db.collection('scores')
+      .where('userId', '==', user.uid)
+      .where('dateString', '==', entryDate)
+      .get();
+    
+    if (!existingScores.empty) {
+      // Entry exists - merge the new scores with existing ones
+      const existingDoc = existingScores.docs[0];
+      const existingData = existingDoc.data();
+      
+      // Check for conflicts (trying to overwrite an existing non-zero score)
+      const conflicts = [];
+      if (amScore && existingData.amScore && existingData.amScore !== 0) {
+        conflicts.push('AM Quiz');
+      }
+      if (pmScore && existingData.pmScore && existingData.pmScore !== 0) {
+        conflicts.push('PM Quiz');
+      }
+      if (wordleScore && existingData.wordleScore && existingData.wordleScore !== 0) {
+        conflicts.push('Wordle');
+      }
+      
+      if (conflicts.length > 0) {
+        if (!confirm(`You already have scores for ${conflicts.join(', ')} on this date. Do you want to overwrite them?`)) {
+          setLoading(false);
           return;
         }
-        
-        setLoading(true);
+      }
+      
+      // Merge scores - keep existing values if new ones aren't provided
+      await db.collection('scores').doc(existingDoc.id).update({
+        amScore: amScore ? parseInt(amScore) : existingData.amScore || 0,
+        pmScore: pmScore ? parseInt(pmScore) : existingData.pmScore || 0,
+        wordleScore: wordleScore ? parseInt(wordleScore) : existingData.wordleScore || 0,
+        date: window.firebase.firestore.Timestamp.fromDate(selectedDate),
+        dateString: entryDate
+      });
+      
+      alert('Score updated successfully!');
+    } else {
+      // No existing entry - create new one with provided scores
+      await db.collection('scores').add({
+        userId: user.uid,
+        amScore: amScore ? parseInt(amScore) : 0,
+        pmScore: pmScore ? parseInt(pmScore) : 0,
+        wordleScore: wordleScore ? parseInt(wordleScore) : 0,
+        date: window.firebase.firestore.Timestamp.fromDate(selectedDate),
+        dateString: entryDate
+      });
+      
+      alert('Score saved successfully!');
+    }
 
-        try {
-          const db = window.firebase.firestore();
-          const selectedDate = new Date(entryDate + 'T12:00:00');
-          
-          // Check if entry already exists for this date
-          const existingScores = await db.collection('scores')
-            .where('userId', '==', user.uid)
-            .where('dateString', '==', entryDate)
-            .get();
-          
-          if (!existingScores.empty) {
-            if (!confirm('An entry already exists for this date. Do you want to update it?')) {
-              setLoading(false);
-              return;
-            }
-            // Delete existing entry
-            await db.collection('scores').doc(existingScores.docs[0].id).delete();
-          }
-
-          await db.collection('scores').add({
-            userId: user.uid,
-            amScore: parseInt(amScore) || 0,
-            pmScore: parseInt(pmScore) || 0,
-            wordleScore: parseInt(wordleScore) || 0,
-            date: window.firebase.firestore.Timestamp.fromDate(selectedDate),
-            dateString: entryDate
-          });
-
-          setAmScore('');
-          setPmScore('');
-          setWordleScore('');
-          setEntryDate(new Date().toISOString().split('T')[0]);
-          setIsEditingDate(false);
-          
-          await loadUserData(user.uid);
-          await loadLeaderboard();
-          alert('Score saved successfully!');
-        } catch (error) {
-          alert('Error saving score: ' + error.message);
-        } finally {
-          setLoading(false);
-        }
-      };
+    // Clear the fields that were entered
+    if (amScore) setAmScore('');
+    if (pmScore) setPmScore('');
+    if (wordleScore) setWordleScore('');
+    
+    await loadUserData(user.uid);
+    await loadLeaderboard();
+  } catch (error) {
+    alert('Error saving score: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
       const joinTeam = async (teamName) => {
   setLoading(true);
@@ -1360,7 +1389,7 @@ const getTeamComparisonData = useMemo(() => {
                     )}
                   </div>
                   
-                  {amScore && pmScore && wordleScore && (
+                  {(amScore || pmScore || wordleScore) && (
                     <div className="p-3 bg-purple-50 rounded-lg">
                       <p className="text-sm font-medium text-purple-900">
                         Total Score: {calculateTotalScore(
