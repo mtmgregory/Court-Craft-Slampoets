@@ -362,42 +362,49 @@
       };
 
       const handleAuth = async () => {
-        setLoading(true);
-        
-        try {
-          if (isSignUp) {
-            const userCredential = await window.firebase.auth()
-              .createUserWithEmailAndPassword(email, password);
-            
-            await userCredential.user.updateProfile({
-              displayName: displayName
-            });
+  setLoading(true);
+  
+  try {
+    if (isSignUp) {
+      const userCredential = await window.firebase.auth()
+        .createUserWithEmailAndPassword(email, password);
+      
+      await userCredential.user.updateProfile({
+        displayName: displayName
+      });
 
-            const db = window.firebase.firestore();
-            await db.collection('users').doc(userCredential.user.uid).set({
-              displayName: displayName,
-              email: email,
-              createdAt: window.firebase.firestore.FieldValue.serverTimestamp()
-            });
-          } else {
-            await window.firebase.auth()
-              .signInWithEmailAndPassword(email, password);
-          }
-        } catch (error) {
-          alert(error.message);
-        } finally {
-          setLoading(false);
-        }
-      };
+      const db = window.firebase.firestore();
+      
+      // Create the user document FIRST with all required fields
+      await db.collection('users').doc(userCredential.user.uid).set({
+        displayName: displayName,
+        email: email,
+        team: '', // Initialize with empty team
+        createdAt: window.firebase.firestore.FieldValue.serverTimestamp()
+      });
+      
+      // Wait a moment to ensure the document is fully created
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+    } else {
+      await window.firebase.auth()
+        .signInWithEmailAndPassword(email, password);
+    }
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
-      const handleLogout = async () => {
-        await window.firebase.auth().signOut();
-        setUserScores([]);
-        setTeamScores([]);
-        setUserTeam('');
-        setAllUsers([]);
-        setLeaderboard([]);
-      };
+const handleLogout = async () => {
+  await window.firebase.auth().signOut();
+  setUserScores([]);
+  setTeamScores([]);
+  setUserTeam('');
+  setAllUsers([]);
+  setLeaderboard([]);
+};
 
       // Data Loading Functions
       const loadUserData = async (uid) => {
@@ -606,23 +613,41 @@
       };
 
       const joinTeam = async (teamName) => {
-        setLoading(true);
-        try {
-          const db = window.firebase.firestore();
-          await db.collection('users').doc(user.uid).update({
-            team: teamName
-          });
-          setUserTeam(teamName);
-          if (teamName) {
-            await loadTeamScores(teamName);
-          }
-          await loadLeaderboard();
-        } catch (error) {
-          alert('Error joining team: ' + error.message);
-        } finally {
-          setLoading(false);
-        }
-      };
+  setLoading(true);
+  try {
+    const db = window.firebase.firestore();
+    const userDocRef = db.collection('users').doc(user.uid);
+    
+    // Check if user document exists first
+    const userDoc = await userDocRef.get();
+    
+    if (!userDoc.exists) {
+      // Create the document if it doesn't exist
+      await userDocRef.set({
+        displayName: user.displayName || user.email,
+        email: user.email,
+        team: teamName,
+        createdAt: window.firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } else {
+      // Update existing document
+      await userDocRef.update({
+        team: teamName
+      });
+    }
+    
+    setUserTeam(teamName);
+    if (teamName) {
+      await loadTeamScores(teamName);
+    }
+    await loadLeaderboard();
+  } catch (error) {
+    console.error('Error joining team:', error);
+    alert('Error joining team: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
       // Analytics Calculations
       const getFilteredScores = (scores) => {
