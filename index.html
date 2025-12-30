@@ -1,0 +1,2217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slam Poets - Enhanced</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyC4OID5pSoWifgFYzEpKZM_1TeLXHotxjQ",
+      authDomain: "quiz-track-9508e.firebaseapp.com",
+      projectId: "quiz-track-9508e",
+      storageBucket: "quiz-track-9508e.firebasestorage.app",
+      messagingSenderId: "415187120430",
+      appId: "1:415187120430:web:88eddb090b7d7902ef0abf",
+      measurementId: "G-6DL99Z6MDD"
+    };
+
+    // Utility Functions for Enhanced Scoring
+    const convertWordleToPoints = (wordleScore) => {
+      // Convert Wordle to 0-15 scale (lower attempts = more points)
+      return (7 - wordleScore) * 2.5;
+    };
+
+    const calculateTotalScore = (amScore, pmScore, wordleScore) => {
+      return amScore + pmScore + convertWordleToPoints(wordleScore);
+    };
+
+    const calculateStandardDeviation = (values) => {
+      const avg = values.reduce((sum, val) => sum + val, 0) / values.length;
+      const squareDiffs = values.map(val => Math.pow(val - avg, 2));
+      const avgSquareDiff = squareDiffs.reduce((sum, val) => sum + val, 0) / values.length;
+      return Math.sqrt(avgSquareDiff);
+    };
+
+    const calculateLinearRegression = (data) => {
+      const n = data.length;
+      const sumX = data.reduce((sum, _, i) => sum + i, 0);
+      const sumY = data.reduce((sum, val) => sum + val, 0);
+      const sumXY = data.reduce((sum, val, i) => sum + (i * val), 0);
+      const sumX2 = data.reduce((sum, _, i) => sum + (i * i), 0);
+      
+      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+      
+      return { slope, intercept, trend: slope > 0 ? 'improving' : slope < 0 ? 'declining' : 'stable' };
+    };
+
+    const calculatePercentile = (value, allValues) => {
+      const sorted = [...allValues].sort((a, b) => a - b);
+      const index = sorted.findIndex(v => v >= value);
+      return ((index / sorted.length) * 100).toFixed(0);
+    };
+
+    const getDayOfWeek = (dateString) => {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', { weekday: 'long' });
+    };
+
+    // Chart Components
+    const LineChartComponent = ({ data, title = "Performance Trends" }) => {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        if (!canvasRef.current || !data || data.length === 0) return;
+
+        if (chartRef.current) {
+          chartRef.current.destroy();
+        }
+
+        const ctx = canvasRef.current.getContext('2d');
+        chartRef.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: data.map((_, i) => `Day ${i + 1}`),
+            datasets: [
+              {
+                label: 'AM Quiz',
+                data: data.map(d => d.AM),
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                tension: 0.4
+              },
+              {
+                label: 'PM Quiz',
+                data: data.map(d => d.PM),
+                borderColor: '#10b981',
+                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                tension: 0.4
+              },
+              {
+                label: 'Wordle (Points)',
+                data: data.map(d => d.WordlePoints),
+                borderColor: '#f59e0b',
+                backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                tension: 0.4
+              },
+              {
+                label: 'Total Score',
+                data: data.map(d => d.Total),
+                borderColor: '#8b5cf6',
+                backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                tension: 0.4,
+                borderWidth: 2
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'top',
+              },
+              title: {
+                display: true,
+                text: title
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                max: 50
+              }
+            }
+          }
+        });
+
+        return () => {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+          }
+        };
+      }, [data, title]);
+
+      return <canvas ref={canvasRef} style={{ maxHeight: '300px' }}></canvas>;
+    };
+
+    const BarChartComponent = ({ data, title = "Comparison" }) => {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        if (!canvasRef.current || !data || data.length === 0) return;
+
+        if (chartRef.current) {
+          chartRef.current.destroy();
+        }
+
+        const ctx = canvasRef.current.getContext('2d');
+        chartRef.current = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: data.map(d => d.label),
+            datasets: [
+              {
+                label: 'AM Quiz',
+                data: data.map(d => parseFloat(d.avgAM)),
+                backgroundColor: '#3b82f6'
+              },
+              {
+                label: 'PM Quiz',
+                data: data.map(d => parseFloat(d.avgPM)),
+                backgroundColor: '#10b981'
+              },
+              {
+                label: 'Wordle Points',
+                data: data.map(d => parseFloat(d.avgWordlePoints)),
+                backgroundColor: '#f59e0b'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'top',
+              },
+              title: {
+                display: true,
+                text: title
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                max: 15
+              }
+            }
+          }
+        });
+
+        return () => {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+          }
+        };
+      }, [data, title]);
+
+      return <canvas ref={canvasRef} style={{ maxHeight: '300px' }}></canvas>;
+    };
+
+    const HistogramComponent = ({ data, title = "Distribution" }) => {
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        if (!canvasRef.current || !data || data.length === 0) return;
+
+        if (chartRef.current) {
+          chartRef.current.destroy();
+        }
+
+        const ctx = canvasRef.current.getContext('2d');
+        chartRef.current = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: data.map(d => d.range),
+            datasets: [{
+              label: 'Frequency',
+              data: data.map(d => d.count),
+              backgroundColor: '#6366f1'
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false
+              },
+              title: {
+                display: true,
+                text: title
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  precision: 0
+                }
+              }
+            }
+          }
+        });
+
+        return () => {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+          }
+        };
+      }, [data, title]);
+
+      return <canvas ref={canvasRef} style={{ maxHeight: '250px' }}></canvas>;
+    };
+   
+    const QuizTracker = () => {
+      // Authentication State
+      const [user, setUser] = useState(null);
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [displayName, setDisplayName] = useState('');
+      const [isSignUp, setIsSignUp] = useState(false);
+      
+      // Navigation State
+      const [currentView, setCurrentView] = useState('entry');
+      const [selectedLeaderboardTab, setSelectedLeaderboardTab] = useState('overall');
+      
+      // Score Entry State
+      const [amScore, setAmScore] = useState('');
+      const [pmScore, setPmScore] = useState('');
+      const [wordleScore, setWordleScore] = useState('');
+      const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
+      const [isEditingDate, setIsEditingDate] = useState(false);
+      
+      // User Data State
+      const [userTeam, setUserTeam] = useState('');
+      const [availableTeams] = useState(['Boys', 'Girls']);
+      const [userScores, setUserScores] = useState([]);
+      const [teamScores, setTeamScores] = useState([]);
+      const [leaderboard, setLeaderboard] = useState([]);
+      const [allUsers, setAllUsers] = useState([]);
+      
+      // Comparison State
+      const [selectedComparisonUser, setSelectedComparisonUser] = useState(null);
+      const [comparisonScores, setComparisonScores] = useState([]);
+      
+      // Filter State
+      const [dateFilter, setDateFilter] = useState('all'); // all, week, month, custom
+      const [customStartDate, setCustomStartDate] = useState('');
+      const [customEndDate, setCustomEndDate] = useState('');
+      
+      // Achievement State
+      const [userAchievements, setUserAchievements] = useState([]);
+      
+      // System State
+      const [firebaseInitialized, setFirebaseInitialized] = useState(false);
+      const [loading, setLoading] = useState(false);
+
+      // Initialize Firebase
+      useEffect(() => {
+        const initFirebase = async () => {
+          try {
+            if (window.firebase && window.firebase.apps.length > 0) {
+              setFirebaseInitialized(true);
+              checkAuthState();
+              return;
+            }
+
+            window.firebase.initializeApp(firebaseConfig);
+            setFirebaseInitialized(true);
+            checkAuthState();
+          } catch (error) {
+            console.error('Firebase initialization error:', error);
+            alert('Firebase setup error. Please check configuration.');
+          }
+        };
+
+        initFirebase();
+      }, []);
+
+      // Authentication
+      const checkAuthState = () => {
+        window.firebase.auth().onAuthStateChanged(async (authUser) => {
+          if (authUser) {
+            let displayNameToUse = authUser.displayName;
+            if (!displayNameToUse) {
+              const db = window.firebase.firestore();
+              const userDoc = await db.collection('users').doc(authUser.uid).get();
+              if (userDoc.exists) {
+                displayNameToUse = userDoc.data().displayName;
+              }
+            }
+            setUser({
+              uid: authUser.uid,
+              email: authUser.email,
+              displayName: displayNameToUse
+            });
+            loadUserData(authUser.uid);
+            loadAllUsers();
+            loadLeaderboard();
+          } else {
+            setUser(null);
+          }
+        });
+      };
+
+      const handleAuth = async () => {
+        setLoading(true);
+        
+        try {
+          if (isSignUp) {
+            const userCredential = await window.firebase.auth()
+              .createUserWithEmailAndPassword(email, password);
+            
+            await userCredential.user.updateProfile({
+              displayName: displayName
+            });
+
+            const db = window.firebase.firestore();
+            await db.collection('users').doc(userCredential.user.uid).set({
+              displayName: displayName,
+              email: email,
+              createdAt: window.firebase.firestore.FieldValue.serverTimestamp()
+            });
+          } else {
+            await window.firebase.auth()
+              .signInWithEmailAndPassword(email, password);
+          }
+        } catch (error) {
+          alert(error.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleLogout = async () => {
+        await window.firebase.auth().signOut();
+        setUserScores([]);
+        setTeamScores([]);
+        setUserTeam('');
+        setAllUsers([]);
+        setLeaderboard([]);
+      };
+
+      // Data Loading Functions
+      const loadUserData = async (uid) => {
+        try {
+          const db = window.firebase.firestore();
+          
+          const userDoc = await db.collection('users').doc(uid).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            setUserTeam(userData.team || '');
+          }
+
+          const scoresSnapshot = await db.collection('scores')
+            .where('userId', '==', uid)
+            .orderBy('date', 'desc')
+            .get();
+          
+          const scores = [];
+          scoresSnapshot.forEach(doc => {
+            scores.push({ id: doc.id, ...doc.data() });
+          });
+          setUserScores(scores.reverse());
+
+          if (userDoc.exists && userDoc.data().team) {
+            loadTeamScores(userDoc.data().team);
+          }
+
+          calculateAchievements(scores);
+        } catch (error) {
+          console.error('Error loading user data:', error);
+        }
+      };
+
+      const loadTeamScores = async (teamName) => {
+        try {
+          const db = window.firebase.firestore();
+          
+          const teamUsersSnapshot = await db.collection('users')
+            .where('team', '==', teamName)
+            .get();
+          
+          const userIds = [];
+          teamUsersSnapshot.forEach(doc => {
+            userIds.push(doc.id);
+          });
+
+          if (userIds.length === 0) return;
+
+          const allScores = [];
+          for (let i = 0; i < userIds.length; i += 10) {
+            const batch = userIds.slice(i, i + 10);
+            const scoresSnapshot = await db.collection('scores')
+              .where('userId', 'in', batch)
+              .orderBy('date', 'desc')
+              .get();
+            
+            scoresSnapshot.forEach(doc => {
+              allScores.push({ id: doc.id, ...doc.data() });
+            });
+          }
+          
+          setTeamScores(allScores);
+        } catch (error) {
+          console.error('Error loading team scores:', error);
+        }
+      };
+
+      const loadAllUsers = async () => {
+        try {
+          const db = window.firebase.firestore();
+          const usersSnapshot = await db.collection('users').get();
+          
+          const users = [];
+          usersSnapshot.forEach(doc => {
+            users.push({ id: doc.id, ...doc.data() });
+          });
+          
+          setAllUsers(users);
+        } catch (error) {
+          console.error('Error loading users:', error);
+        }
+      };
+
+      const loadLeaderboard = async () => {
+        try {
+          const db = window.firebase.firestore();
+          const usersSnapshot = await db.collection('users').get();
+          
+          const leaderboardData = [];
+          
+          for (const userDoc of usersSnapshot.docs) {
+            const userData = userDoc.data();
+            const scoresSnapshot = await db.collection('scores')
+              .where('userId', '==', userDoc.id)
+              .get();
+            
+            let totalAM = 0, totalPM = 0, totalWordle = 0, totalWordlePoints = 0, count = 0;
+            let last7Days = [];
+            let last30Days = [];
+            const now = new Date();
+            
+            scoresSnapshot.forEach(doc => {
+              const score = doc.data();
+              const scoreDate = score.date ? score.date.toDate() : new Date(score.dateString);
+              const daysDiff = Math.floor((now - scoreDate) / (1000 * 60 * 60 * 24));
+              
+              totalAM += score.amScore || 0;
+              totalPM += score.pmScore || 0;
+              totalWordle += score.wordleScore || 0;
+              totalWordlePoints += convertWordleToPoints(score.wordleScore || 7);
+              count++;
+              
+              if (daysDiff <= 7) {
+                last7Days.push(score);
+              }
+              if (daysDiff <= 30) {
+                last30Days.push(score);
+              }
+            });
+
+            if (count > 0) {
+              const avgAM = totalAM / count;
+              const avgPM = totalPM / count;
+              const avgWordlePoints = totalWordlePoints / count;
+              const avgTotal = avgAM + avgPM + avgWordlePoints;
+              
+              leaderboardData.push({
+                userId: userDoc.id,
+                name: userData.displayName || 'Anonymous',
+                team: userData.team || 'No Team',
+                avgAM: avgAM.toFixed(1),
+                avgPM: avgPM.toFixed(1),
+                avgWordle: (totalWordle / count).toFixed(1),
+                avgWordlePoints: avgWordlePoints.toFixed(1),
+                avgTotal: avgTotal.toFixed(1),
+                totalEntries: count,
+                last7DaysAvg: last7Days.length > 0 ? 
+                  ((last7Days.reduce((sum, s) => sum + s.amScore + s.pmScore + convertWordleToPoints(s.wordleScore), 0) / last7Days.length).toFixed(1)) : 
+                  '0.0',
+                recentEntries: last7Days.length
+              });
+            }
+          }
+
+          leaderboardData.sort((a, b) => parseFloat(b.avgTotal) - parseFloat(a.avgTotal));
+          
+          setLeaderboard(leaderboardData);
+        } catch (error) {
+          console.error('Error loading leaderboard:', error);
+        }
+      };
+
+
+// Part 3: Score Saving, Analytics & Achievements
+
+      const saveScore = async () => {
+        if (!amScore || !pmScore || !wordleScore) {
+          alert('Please fill in all scores');
+          return;
+        }
+        
+        setLoading(true);
+
+        try {
+          const db = window.firebase.firestore();
+          const selectedDate = new Date(entryDate + 'T12:00:00');
+          
+          // Check if entry already exists for this date
+          const existingScores = await db.collection('scores')
+            .where('userId', '==', user.uid)
+            .where('dateString', '==', entryDate)
+            .get();
+          
+          if (!existingScores.empty) {
+            if (!confirm('An entry already exists for this date. Do you want to update it?')) {
+              setLoading(false);
+              return;
+            }
+            // Delete existing entry
+            await db.collection('scores').doc(existingScores.docs[0].id).delete();
+          }
+
+          await db.collection('scores').add({
+            userId: user.uid,
+            amScore: parseInt(amScore) || 0,
+            pmScore: parseInt(pmScore) || 0,
+            wordleScore: parseInt(wordleScore) || 0,
+            date: window.firebase.firestore.Timestamp.fromDate(selectedDate),
+            dateString: entryDate
+          });
+
+          setAmScore('');
+          setPmScore('');
+          setWordleScore('');
+          setEntryDate(new Date().toISOString().split('T')[0]);
+          setIsEditingDate(false);
+          
+          await loadUserData(user.uid);
+          await loadLeaderboard();
+          alert('Score saved successfully!');
+        } catch (error) {
+          alert('Error saving score: ' + error.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const joinTeam = async (teamName) => {
+        setLoading(true);
+        try {
+          const db = window.firebase.firestore();
+          await db.collection('users').doc(user.uid).update({
+            team: teamName
+          });
+          setUserTeam(teamName);
+          if (teamName) {
+            await loadTeamScores(teamName);
+          }
+          await loadLeaderboard();
+        } catch (error) {
+          alert('Error joining team: ' + error.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Analytics Calculations
+      const getFilteredScores = (scores) => {
+        if (dateFilter === 'all') return scores;
+        
+        const now = new Date();
+        return scores.filter(score => {
+          const scoreDate = score.date ? score.date.toDate() : new Date(score.dateString);
+          
+          if (dateFilter === 'week') {
+            const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+            return scoreDate >= weekAgo;
+          } else if (dateFilter === 'month') {
+            const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+            return scoreDate >= monthAgo;
+          } else if (dateFilter === 'custom' && customStartDate && customEndDate) {
+            const start = new Date(customStartDate);
+            const end = new Date(customEndDate);
+            return scoreDate >= start && scoreDate <= end;
+          }
+          
+          return true;
+        });
+      };
+
+      const calculateAdvancedStats = useMemo(() => {
+        const filteredScores = getFilteredScores(userScores);
+        if (filteredScores.length === 0) {
+          return {
+            avgAM: 0, avgPM: 0, avgWordle: 0, avgWordlePoints: 0, avgTotal: 0,
+            stdDevTotal: 0, consistency: 0,
+            trend: { slope: 0, trend: 'stable' },
+            bestDay: null, worstDay: null,
+            currentStreak: 0, longestStreak: 0,
+            dayOfWeekStats: {},
+            categoryStrength: '',
+            percentileAM: 0, percentilePM: 0, percentileTotal: 0
+          };
+        }
+
+        const amScores = filteredScores.map(s => s.amScore);
+        const pmScores = filteredScores.map(s => s.pmScore);
+        const wordleScores = filteredScores.map(s => s.wordleScore);
+        const wordlePoints = filteredScores.map(s => convertWordleToPoints(s.wordleScore));
+        const totalScores = filteredScores.map(s => s.amScore + s.pmScore + convertWordleToPoints(s.wordleScore));
+
+        const avgAM = amScores.reduce((a, b) => a + b, 0) / amScores.length;
+        const avgPM = pmScores.reduce((a, b) => a + b, 0) / pmScores.length;
+        const avgWordle = wordleScores.reduce((a, b) => a + b, 0) / wordleScores.length;
+        const avgWordlePoints = wordlePoints.reduce((a, b) => a + b, 0) / wordlePoints.length;
+        const avgTotal = totalScores.reduce((a, b) => a + b, 0) / totalScores.length;
+
+        const stdDevTotal = calculateStandardDeviation(totalScores);
+        const consistency = Math.max(0, 100 - (stdDevTotal * 5)); // Lower std dev = higher consistency
+
+        const trend = calculateLinearRegression(totalScores);
+
+        const scoresWithTotal = filteredScores.map(s => ({
+          ...s,
+          total: s.amScore + s.pmScore + convertWordleToPoints(s.wordleScore)
+        }));
+        const bestDay = scoresWithTotal.reduce((max, s) => s.total > max.total ? s : max, scoresWithTotal[0]);
+        const worstDay = scoresWithTotal.reduce((min, s) => s.total < min.total ? s : min, scoresWithTotal[0]);
+
+        // Calculate streaks
+        const sortedScores = [...userScores].sort((a, b) => {
+          const dateA = a.date ? a.date.toDate() : new Date(a.dateString);
+          const dateB = b.date ? b.date.toDate() : new Date(b.dateString);
+          return dateB - dateA;
+        });
+
+        let currentStreak = 0;
+        let longestStreak = 0;
+        let tempStreak = 0;
+        let lastDate = null;
+
+        sortedScores.forEach(score => {
+          const scoreDate = score.date ? score.date.toDate() : new Date(score.dateString);
+          if (!lastDate) {
+            tempStreak = 1;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            scoreDate.setHours(0, 0, 0, 0);
+            if (scoreDate.getTime() === today.getTime() || 
+                scoreDate.getTime() === today.getTime() - 86400000) {
+              currentStreak = 1;
+            }
+          } else {
+            const dayDiff = Math.floor((lastDate - scoreDate) / (1000 * 60 * 60 * 24));
+            if (dayDiff === 1) {
+              tempStreak++;
+              if (currentStreak > 0) currentStreak++;
+            } else {
+              longestStreak = Math.max(longestStreak, tempStreak);
+              tempStreak = 1;
+              currentStreak = 0;
+            }
+          }
+          lastDate = scoreDate;
+        });
+        longestStreak = Math.max(longestStreak, tempStreak);
+
+        // Day of week statistics
+        const dayOfWeekStats = {};
+        filteredScores.forEach(score => {
+          const day = getDayOfWeek(score.dateString);
+          if (!dayOfWeekStats[day]) {
+            dayOfWeekStats[day] = { count: 0, totalScore: 0 };
+          }
+          dayOfWeekStats[day].count++;
+          dayOfWeekStats[day].totalScore += score.amScore + score.pmScore + convertWordleToPoints(score.wordleScore);
+        });
+
+        Object.keys(dayOfWeekStats).forEach(day => {
+          dayOfWeekStats[day].avg = (dayOfWeekStats[day].totalScore / dayOfWeekStats[day].count).toFixed(1);
+        });
+
+        // Category strength
+        const amPercent = (avgAM / 15) * 100;
+        const pmPercent = (avgPM / 15) * 100;
+        const wordlePercent = (avgWordlePoints / 15) * 100;
+        
+        let categoryStrength = 'Balanced';
+        if (amPercent > pmPercent && amPercent > wordlePercent) {
+          categoryStrength = 'AM Quiz Specialist';
+        } else if (pmPercent > amPercent && pmPercent > wordlePercent) {
+          categoryStrength = 'PM Quiz Specialist';
+        } else if (wordlePercent > amPercent && wordlePercent > pmPercent) {
+          categoryStrength = 'Wordle Master';
+        }
+
+        // Percentiles
+        const allAMScores = leaderboard.map(l => parseFloat(l.avgAM));
+        const allPMScores = leaderboard.map(l => parseFloat(l.avgPM));
+        const allTotalScores = leaderboard.map(l => parseFloat(l.avgTotal));
+
+        const percentileAM = calculatePercentile(avgAM, allAMScores);
+        const percentilePM = calculatePercentile(avgPM, allPMScores);
+        const percentileTotal = calculatePercentile(avgTotal, allTotalScores);
+
+        return {
+          avgAM: avgAM.toFixed(1),
+          avgPM: avgPM.toFixed(1),
+          avgWordle: avgWordle.toFixed(1),
+          avgWordlePoints: avgWordlePoints.toFixed(1),
+          avgTotal: avgTotal.toFixed(1),
+          stdDevTotal: stdDevTotal.toFixed(2),
+          consistency: consistency.toFixed(0),
+          trend,
+          bestDay,
+          worstDay,
+          currentStreak,
+          longestStreak,
+          dayOfWeekStats,
+          categoryStrength,
+          percentileAM,
+          percentilePM,
+          percentileTotal
+        };
+      }, [userScores, dateFilter, customStartDate, customEndDate, leaderboard]);
+
+      // Achievement System
+      const calculateAchievements = (scores) => {
+        const achievements = [];
+
+        // Perfect Score Achievement
+        const perfectAM = scores.some(s => s.amScore === 15);
+        const perfectPM = scores.some(s => s.pmScore === 15);
+        const perfectWordle = scores.some(s => s.wordleScore === 1);
+
+        if (perfectAM) achievements.push({ name: 'Perfect AM', icon: '🎯', description: 'Scored 15/15 on AM Quiz' });
+        if (perfectPM) achievements.push({ name: 'Perfect PM', icon: '🎯', description: 'Scored 15/15 on PM Quiz' });
+        if (perfectWordle) achievements.push({ name: 'Wordle Genius', icon: '🧠', description: 'Solved Wordle in 1 try' });
+
+        // Wordle Master (avg <= 3.5)
+        const avgWordle = scores.reduce((sum, s) => sum + s.wordleScore, 0) / scores.length;
+        if (avgWordle <= 3.5) {
+          achievements.push({ name: 'Wordle Master', icon: '🏆', description: 'Average ≤3.5 attempts' });
+        }
+
+        // Consistency King (std dev < 3)
+        const totalScores = scores.map(s => s.amScore + s.pmScore + convertWordleToPoints(s.wordleScore));
+        const stdDev = calculateStandardDeviation(totalScores);
+        if (stdDev < 3) {
+          achievements.push({ name: 'Consistency King', icon: '👑', description: 'Very consistent scores' });
+        }
+
+        // High Performer (avg total > 35)
+        const avgTotal = totalScores.reduce((a, b) => a + b, 0) / totalScores.length;
+        if (avgTotal > 35) {
+          achievements.push({ name: 'Elite Performer', icon: '⭐', description: 'Average total >35 points' });
+        }
+
+        // Team Player (10+ entries)
+        if (scores.length >= 10) {
+          achievements.push({ name: 'Dedicated', icon: '💪', description: '10+ entries logged' });
+        }
+        if (scores.length >= 30) {
+          achievements.push({ name: 'Committed', icon: '🔥', description: '30+ entries logged' });
+        }
+
+        setUserAchievements(achievements);
+      };
+
+
+// Part 4: Head-to-Head Comparison & Distribution Analysis
+
+      const loadComparisonUser = async (userId) => {
+        if (!userId) {
+          setSelectedComparisonUser(null);
+          setComparisonScores([]);
+          return;
+        }
+
+        try {
+          const db = window.firebase.firestore();
+          const scoresSnapshot = await db.collection('scores')
+            .where('userId', '==', userId)
+            .orderBy('date', 'desc')
+            .get();
+          
+          const scores = [];
+          scoresSnapshot.forEach(doc => {
+            scores.push({ id: doc.id, ...doc.data() });
+          });
+          
+          setComparisonScores(scores.reverse());
+          setSelectedComparisonUser(allUsers.find(u => u.id === userId));
+        } catch (error) {
+          console.error('Error loading comparison user:', error);
+        }
+      };
+
+      const getComparisonData = useMemo(() => {
+        if (!selectedComparisonUser || comparisonScores.length === 0) return null;
+
+        const userDates = new Set(userScores.map(s => s.dateString));
+        const compDates = new Set(comparisonScores.map(s => s.dateString));
+        const commonDates = [...userDates].filter(d => compDates.has(d)).sort();
+
+        const comparisons = commonDates.map(date => {
+          const userScore = userScores.find(s => s.dateString === date);
+          const compScore = comparisonScores.find(s => s.dateString === date);
+          
+          const userTotal = userScore.amScore + userScore.pmScore + convertWordleToPoints(userScore.wordleScore);
+          const compTotal = compScore.amScore + compScore.pmScore + convertWordleToPoints(compScore.wordleScore);
+          
+          return {
+            date,
+            userTotal,
+            compTotal,
+            winner: userTotal > compTotal ? 'you' : userTotal < compTotal ? 'them' : 'tie',
+            userAM: userScore.amScore,
+            userPM: userScore.pmScore,
+            userWordle: convertWordleToPoints(userScore.wordleScore),
+            compAM: compScore.amScore,
+            compPM: compScore.pmScore,
+            compWordle: convertWordleToPoints(compScore.wordleScore)
+          };
+        });
+
+        const wins = comparisons.filter(c => c.winner === 'you').length;
+        const losses = comparisons.filter(c => c.winner === 'them').length;
+        const ties = comparisons.filter(c => c.winner === 'tie').length;
+
+        const userAvgAM = comparisons.reduce((sum, c) => sum + c.userAM, 0) / comparisons.length;
+        const compAvgAM = comparisons.reduce((sum, c) => sum + c.compAM, 0) / comparisons.length;
+        const userAvgPM = comparisons.reduce((sum, c) => sum + c.userPM, 0) / comparisons.length;
+        const compAvgPM = comparisons.reduce((sum, c) => sum + c.compPM, 0) / comparisons.length;
+        const userAvgWordle = comparisons.reduce((sum, c) => sum + c.userWordle, 0) / comparisons.length;
+        const compAvgWordle = comparisons.reduce((sum, c) => sum + c.compWordle, 0) / comparisons.length;
+
+        return {
+          comparisons,
+          record: { wins, losses, ties },
+          averages: {
+            userAM: userAvgAM.toFixed(1),
+            compAM: compAvgAM.toFixed(1),
+            userPM: userAvgPM.toFixed(1),
+            compPM: compAvgPM.toFixed(1),
+            userWordle: userAvgWordle.toFixed(1),
+            compWordle: compAvgWordle.toFixed(1),
+            amDiff: ((userAvgAM - compAvgAM) / compAvgAM * 100).toFixed(1),
+            pmDiff: ((userAvgPM - compAvgPM) / compAvgPM * 100).toFixed(1),
+            wordleDiff: ((userAvgWordle - compAvgWordle) / compAvgWordle * 100).toFixed(1)
+          }
+        };
+      }, [userScores, comparisonScores, selectedComparisonUser]);
+
+      const getScoreDistribution = (scores) => {
+        const ranges = [
+          { range: '0-10', min: 0, max: 10 },
+          { range: '11-20', min: 11, max: 20 },
+          { range: '21-30', min: 21, max: 30 },
+          { range: '31-40', min: 31, max: 40 },
+          { range: '41-45', min: 41, max: 45 }
+        ];
+
+        const distribution = ranges.map(r => ({
+          ...r,
+          count: 0
+        }));
+
+        scores.forEach(score => {
+          const total = score.amScore + score.pmScore + convertWordleToPoints(score.wordleScore);
+          const range = distribution.find(d => total >= d.min && total <= d.max);
+          if (range) range.count++;
+        });
+
+        return distribution;
+      };
+
+      const getChartData = (scores) => {
+        return scores.map((score, index) => ({
+          day: `Day ${index + 1}`,
+          AM: score.amScore,
+          PM: score.pmScore,
+          Wordle: score.wordleScore,
+          WordlePoints: convertWordleToPoints(score.wordleScore),
+          Total: score.amScore + score.pmScore + convertWordleToPoints(score.wordleScore)
+        }));
+      };
+
+      const getTeamAverages = () => {
+        const teamMap = {};
+        
+        leaderboard.forEach(user => {
+          if (!teamMap[user.team]) {
+            teamMap[user.team] = { count: 0, totalAM: 0, totalPM: 0, totalWordle: 0, totalWordlePoints: 0 };
+          }
+          teamMap[user.team].count++;
+          teamMap[user.team].totalAM += parseFloat(user.avgAM);
+          teamMap[user.team].totalPM += parseFloat(user.avgPM);
+          teamMap[user.team].totalWordle += parseFloat(user.avgWordle);
+          teamMap[user.team].totalWordlePoints += parseFloat(user.avgWordlePoints);
+        });
+
+        return Object.keys(teamMap).map(team => ({
+          label: team,
+          avgAM: (teamMap[team].totalAM / teamMap[team].count).toFixed(1),
+          avgPM: (teamMap[team].totalPM / teamMap[team].count).toFixed(1),
+          avgWordle: (teamMap[team].totalWordle / teamMap[team].count).toFixed(1),
+          avgWordlePoints: (teamMap[team].totalWordlePoints / teamMap[team].count).toFixed(1)
+        }));
+      };
+
+      const getDayOfWeekComparison = () => {
+        const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        const dayData = {};
+        
+        days.forEach(day => {
+          dayData[day] = { count: 0, totalAM: 0, totalPM: 0, totalWordlePoints: 0 };
+        });
+
+        userScores.forEach(score => {
+          const day = getDayOfWeek(score.dateString);
+          if (dayData[day]) {
+            dayData[day].count++;
+            dayData[day].totalAM += score.amScore;
+            dayData[day].totalPM += score.pmScore;
+            dayData[day].totalWordlePoints += convertWordleToPoints(score.wordleScore);
+          }
+        });
+
+        return days.filter(day => dayData[day].count > 0).map(day => ({
+          label: day,
+          avgAM: (dayData[day].totalAM / dayData[day].count).toFixed(1),
+          avgPM: (dayData[day].totalPM / dayData[day].count).toFixed(1),
+          avgWordlePoints: (dayData[day].totalWordlePoints / dayData[day].count).toFixed(1),
+          count: dayData[day].count
+        }));
+      };
+
+      const getLeaderboardByCategory = (category) => {
+        const sorted = [...leaderboard];
+        
+        switch(category) {
+          case 'am':
+            sorted.sort((a, b) => parseFloat(b.avgAM) - parseFloat(a.avgAM));
+            break;
+          case 'pm':
+            sorted.sort((a, b) => parseFloat(b.avgPM) - parseFloat(a.avgPM));
+            break;
+          case 'wordle':
+            sorted.sort((a, b) => parseFloat(b.avgWordlePoints) - parseFloat(a.avgWordlePoints));
+            break;
+          case 'mostActive':
+            sorted.sort((a, b) => b.totalEntries - a.totalEntries);
+            break;
+          case 'recentForm':
+            sorted.sort((a, b) => parseFloat(b.last7DaysAvg) - parseFloat(a.last7DaysAvg));
+            break;
+          case 'overall':
+          default:
+            sorted.sort((a, b) => parseFloat(b.avgTotal) - parseFloat(a.avgTotal));
+        }
+        
+        return sorted;
+      };
+
+      const getTeamLeaderboard = (teamName) => {
+        return leaderboard
+          .filter(player => player.team === teamName)
+          .sort((a, b) => parseFloat(b.avgTotal) - parseFloat(a.avgTotal));
+      };
+
+
+const getTeamComparisonData = useMemo(() => {
+  const boysPlayers = leaderboard.filter(p => p.team === 'Boys');
+  const girlsPlayers = leaderboard.filter(p => p.team === 'Girls');
+  
+  if (boysPlayers.length === 0 || girlsPlayers.length === 0) return null;
+
+  const boysAvgAM = boysPlayers.reduce((sum, p) => sum + parseFloat(p.avgAM), 0) / boysPlayers.length;
+  const boysAvgPM = boysPlayers.reduce((sum, p) => sum + parseFloat(p.avgPM), 0) / boysPlayers.length;
+  const boysAvgWordle = boysPlayers.reduce((sum, p) => sum + parseFloat(p.avgWordlePoints), 0) / boysPlayers.length;
+  const boysAvgTotal = boysAvgAM + boysAvgPM + boysAvgWordle;
+
+  const girlsAvgAM = girlsPlayers.reduce((sum, p) => sum + parseFloat(p.avgAM), 0) / girlsPlayers.length;
+  const girlsAvgPM = girlsPlayers.reduce((sum, p) => sum + parseFloat(p.avgPM), 0) / girlsPlayers.length;
+  const girlsAvgWordle = girlsPlayers.reduce((sum, p) => sum + parseFloat(p.avgWordlePoints), 0) / girlsPlayers.length;
+  const girlsAvgTotal = girlsAvgAM + girlsAvgPM + girlsAvgWordle;
+
+  return {
+    boys: {
+      avgAM: boysAvgAM.toFixed(1),
+      avgPM: boysAvgPM.toFixed(1),
+      avgWordle: boysAvgWordle.toFixed(1),
+      avgTotal: boysAvgTotal.toFixed(1),
+      playerCount: boysPlayers.length
+    },
+    girls: {
+      avgAM: girlsAvgAM.toFixed(1),
+      avgPM: girlsAvgPM.toFixed(1),
+      avgWordle: girlsAvgWordle.toFixed(1),
+      avgTotal: girlsAvgTotal.toFixed(1),
+      playerCount: girlsPlayers.length
+    },
+    differences: {
+      amDiff: ((boysAvgAM - girlsAvgAM) / girlsAvgAM * 100).toFixed(1),
+      pmDiff: ((boysAvgPM - girlsAvgPM) / girlsAvgPM * 100).toFixed(1),
+      wordleDiff: ((boysAvgWordle - girlsAvgWordle) / girlsAvgWordle * 100).toFixed(1),
+      totalDiff: ((boysAvgTotal - girlsAvgTotal) / girlsAvgTotal * 100).toFixed(1)
+    },
+    winner: boysAvgTotal > girlsAvgTotal ? 'Boys' : girlsAvgTotal > boysAvgTotal ? 'Girls' : 'Tie'
+  };
+}, [leaderboard]);
+
+// Part 5: UI Rendering - Authentication & Score Entry
+
+      if (!firebaseInitialized) {
+        return (
+          <div className="flex items-center justify-center min-h-screen bg-gray-100">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+              <p className="text-gray-600">Loading Firebase...</p>
+            </div>
+          </div>
+        );
+      }
+
+      if (!user) {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+              <h1 className="text-3xl font-bold text-center mb-6 text-gray-800">
+                Slam Poets
+              </h1>
+              
+              <div className="space-y-4">
+                {isSignUp && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Display Name
+                    </label>
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                )}
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                
+                <button
+                  onClick={handleAuth}
+                  disabled={loading}
+                  className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+                >
+                  {loading ? 'Processing...' : (isSignUp ? 'Sign Up' : 'Log In')}
+                </button>
+              </div>
+              
+              <button
+                onClick={() => setIsSignUp(!isSignUp)}
+                className="w-full mt-4 text-blue-600 hover:text-blue-700 font-medium"
+              >
+                {isSignUp ? 'Already have an account? Log In' : 'Need an account? Sign Up'}
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-gray-50">
+          <nav className="bg-white shadow-sm border-b sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 py-4">
+              <div className="flex justify-between items-center">
+                <h1 className="text-2xl font-bold text-gray-800">Slam Poets</h1>
+                <div className="flex items-center gap-4">
+                  <span className="text-sm text-gray-600">
+                    {user.displayName || user.email}
+                    {userTeam && <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">{userTeam}</span>}
+                  </span>
+                  <button
+                    onClick={handleLogout}
+                    className="px-4 py-2 text-sm bg-gray-200 rounded-lg hover:bg-gray-300 transition"
+                  >
+                    Logout
+                  </button>
+                </div>
+              </div>
+            </div>
+          </nav>
+
+          <div className="max-w-7xl mx-auto px-4 py-6">
+            {/* Navigation Tabs */}
+            <div className="flex gap-2 mb-6 flex-wrap">
+              <button
+                onClick={() => setCurrentView('entry')}
+                className={`px-6 py-2 rounded-lg font-medium transition ${
+                  currentView === 'entry'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Enter Scores
+              </button>
+              <button
+                onClick={() => setCurrentView('analytics')}
+                className={`px-6 py-2 rounded-lg font-medium transition ${
+                  currentView === 'analytics'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                My Analytics
+              </button>
+              <button
+                onClick={() => setCurrentView('comparison')}
+                className={`px-6 py-2 rounded-lg font-medium transition ${
+                  currentView === 'comparison'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Compare
+              </button>
+              <button
+                onClick={() => setCurrentView('team')}
+                className={`px-6 py-2 rounded-lg font-medium transition ${
+                  currentView === 'team'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Team
+              </button>
+		
+		<button
+  onClick={() => setCurrentView('teamComparison')}
+  className={`px-6 py-2 rounded-lg font-medium transition ${
+    currentView === 'teamComparison'
+      ? 'bg-blue-600 text-white'
+      : 'bg-white text-gray-700 hover:bg-gray-50'
+  }`}
+>
+  Boys vs Girls
+</button>
+
+              <button
+                onClick={() => setCurrentView('leaderboard')}
+                className={`px-6 py-2 rounded-lg font-medium transition ${
+                  currentView === 'leaderboard'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Leaderboard
+              </button>
+              <button
+                onClick={() => setCurrentView('achievements')}
+                className={`px-6 py-2 rounded-lg font-medium transition ${
+                  currentView === 'achievements'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Achievements
+              </button>
+            </div>
+
+            {/* Score Entry View */}
+            {currentView === 'entry' && (
+              <div className="bg-white rounded-xl shadow-md p-6 max-w-md mx-auto">
+                <h2 className="text-xl font-bold mb-4">Add Scores</h2>
+                
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Date
+                    </label>
+                    <button
+                      onClick={() => setIsEditingDate(!isEditingDate)}
+                      className="text-xs text-blue-600 hover:text-blue-700"
+                    >
+                      {isEditingDate ? 'Today' : 'Change Date'}
+                    </button>
+                  </div>
+                  {isEditingDate ? (
+                    <input
+                      type="date"
+                      value={entryDate}
+                      onChange={(e) => setEntryDate(e.target.value)}
+                      max={new Date().toISOString().split('T')[0]}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  ) : (
+                    <div className="px-4 py-2 bg-gray-50 rounded-lg text-gray-700">
+                      {new Date(entryDate).toLocaleDateString('en-US', { 
+                        weekday: 'long', 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Stuff.co.nz AM Quiz (0-15)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="15"
+                      value={amScore}
+                      onChange={(e) => setAmScore(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Stuff.co.nz PM Quiz (0-15)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="15"
+                      value={pmScore}
+                      onChange={(e) => setPmScore(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Wordle (1-6, or 7 for fail)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="7"
+                      value={wordleScore}
+                      onChange={(e) => setWordleScore(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                    {wordleScore && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Points: {convertWordleToPoints(parseInt(wordleScore)).toFixed(1)}/15
+                      </p>
+                    )}
+                  </div>
+                  
+                  {amScore && pmScore && wordleScore && (
+                    <div className="p-3 bg-purple-50 rounded-lg">
+                      <p className="text-sm font-medium text-purple-900">
+                        Total Score: {calculateTotalScore(
+                          parseInt(amScore) || 0, 
+                          parseInt(pmScore) || 0, 
+                          parseInt(wordleScore) || 0
+                        ).toFixed(1)}/45
+                      </p>
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={saveScore}
+                    disabled={loading}
+                    className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+                  >
+                    {loading ? 'Saving...' : 'Save Scores'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+
+{/* Analytics View */}
+            {currentView === 'analytics' && (
+              <div className="space-y-6">
+                {/* Date Filter */}
+                <div className="bg-white rounded-xl shadow-md p-4">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="text-sm font-medium text-gray-700">Period:</span>
+                    <button
+                      onClick={() => setDateFilter('all')}
+                      className={`px-3 py-1 rounded text-sm ${dateFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                    >
+                      All Time
+                    </button>
+                    <button
+                      onClick={() => setDateFilter('week')}
+                      className={`px-3 py-1 rounded text-sm ${dateFilter === 'week' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                    >
+                      Last 7 Days
+                    </button>
+                    <button
+                      onClick={() => setDateFilter('month')}
+                      className={`px-3 py-1 rounded text-sm ${dateFilter === 'month' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                    >
+                      Last 30 Days
+                    </button>
+                    <button
+                      onClick={() => setDateFilter('custom')}
+                      className={`px-3 py-1 rounded text-sm ${dateFilter === 'custom' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                    >
+                      Custom
+                    </button>
+                    {dateFilter === 'custom' && (
+                      <>
+                        <input
+                          type="date"
+                          value={customStartDate}
+                          onChange={(e) => setCustomStartDate(e.target.value)}
+                          className="px-2 py-1 border rounded text-sm"
+                        />
+                        <span className="text-sm">to</span>
+                        <input
+                          type="date"
+                          value={customEndDate}
+                          onChange={(e) => setCustomEndDate(e.target.value)}
+                          className="px-2 py-1 border rounded text-sm"
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Performance Chart */}
+                <div className="bg-white rounded-xl shadow-md p-6">
+                  <h2 className="text-xl font-bold mb-4">Your Performance Trends</h2>
+                  {getFilteredScores(userScores).length > 0 ? (
+                    <div style={{ height: '300px' }}>
+                      <LineChartComponent data={getChartData(getFilteredScores(userScores))} />
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-center py-8">No data for selected period</p>
+                  )}
+                </div>
+
+                {/* Key Metrics */}
+                <div className="grid md:grid-cols-4 gap-4">
+                  <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-md p-6 text-white">
+                    <h3 className="text-sm opacity-90 mb-2">Avg AM</h3>
+                    <p className="text-3xl font-bold">{calculateAdvancedStats.avgAM}</p>
+                    <p className="text-xs opacity-75 mt-1">Top {calculateAdvancedStats.percentileAM}%</p>
+                  </div>
+                  
+                  <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-md p-6 text-white">
+                    <h3 className="text-sm opacity-90 mb-2">Avg PM</h3>
+                    <p className="text-3xl font-bold">{calculateAdvancedStats.avgPM}</p>
+                    <p className="text-xs opacity-75 mt-1">Top {calculateAdvancedStats.percentilePM}%</p>
+                  </div>
+                  
+                  <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl shadow-md p-6 text-white">
+                    <h3 className="text-sm opacity-90 mb-2">Avg Wordle</h3>
+                    <p className="text-3xl font-bold">{calculateAdvancedStats.avgWordlePoints}</p>
+                    <p className="text-xs opacity-75 mt-1">{calculateAdvancedStats.avgWordle} attempts</p>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-md p-6 text-white">
+                    <h3 className="text-sm opacity-90 mb-2">Total Score</h3>
+                    <p className="text-3xl font-bold">{calculateAdvancedStats.avgTotal}</p>
+                    <p className="text-xs opacity-75 mt-1">Top {calculateAdvancedStats.percentileTotal}%</p>
+                  </div>
+                </div>
+
+                {/* Advanced Stats */}
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div className="bg-white rounded-xl shadow-md p-6">
+                    <h3 className="text-lg font-bold mb-4">Performance Insights</h3>
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Consistency Score</span>
+                        <span className="font-semibold text-blue-600">{calculateAdvancedStats.consistency}/100</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Trend</span>
+                        <span className={`font-semibold ${
+                          calculateAdvancedStats.trend.trend === 'improving' ? 'text-green-600' : 
+                          calculateAdvancedStats.trend.trend === 'declining' ? 'text-red-600' : 
+                          'text-gray-600'
+                        }`}>
+                          {calculateAdvancedStats.trend.trend === 'improving' ? '📈 Improving' : 
+                           calculateAdvancedStats.trend.trend === 'declining' ? '📉 Declining' : 
+                           '➡️ Stable'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Category Strength</span>
+                        <span className="font-semibold text-purple-600 text-sm">{calculateAdvancedStats.categoryStrength}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Current Streak</span>
+                        <span className="font-semibold text-orange-600">{calculateAdvancedStats.currentStreak} days 🔥</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-600">Longest Streak</span>
+                        <span className="font-semibold text-orange-600">{calculateAdvancedStats.longestStreak} days</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl shadow-md p-6">
+                    <h3 className="text-lg font-bold mb-4">Personal Records</h3>
+                    {calculateAdvancedStats.bestDay && (
+                      <div className="space-y-3">
+                        <div className="p-3 bg-green-50 rounded-lg">
+                          <p className="text-sm text-gray-600 mb-1">Best Day 🏆</p>
+                          <p className="font-semibold text-green-700">
+                            {calculateAdvancedStats.bestDay.total.toFixed(1)} points
+                          </p>
+                          <p className="text-xs text-gray-500">{calculateAdvancedStats.bestDay.dateString}</p>
+                        </div>
+                        <div className="p-3 bg-blue-50 rounded-lg">
+                          <p className="text-sm text-gray-600 mb-1">Total Entries</p>
+                          <p className="font-semibold text-blue-700">{userScores.length} days</p>
+                        </div>
+                        <div className="p-3 bg-purple-50 rounded-lg">
+                          <p className="text-sm text-gray-600 mb-1">Std Deviation</p>
+                          <p className="font-semibold text-purple-700">{calculateAdvancedStats.stdDevTotal}</p>
+                          <p className="text-xs text-gray-500">Lower is more consistent</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Score Distribution */}
+                <div className="bg-white rounded-xl shadow-md p-6">
+                  <h3 className="text-lg font-bold mb-4">Score Distribution</h3>
+                  <div style={{ height: '250px' }}>
+                    <HistogramComponent 
+                      data={getScoreDistribution(getFilteredScores(userScores))}
+                      title="Total Score Frequency"
+                    />
+                  </div>
+                </div>
+
+                {/* Day of Week Performance */}
+                {Object.keys(calculateAdvancedStats.dayOfWeekStats).length > 0 && (
+                  <div className="bg-white rounded-xl shadow-md p-6">
+                    <h3 className="text-lg font-bold mb-4">Day of Week Performance</h3>
+                    <div style={{ height: '300px' }}>
+                      <BarChartComponent 
+                        data={getDayOfWeekComparison()}
+                        title="Average by Day"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Comparison View */}
+            {currentView === 'comparison' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-xl shadow-md p-6">
+                  <h2 className="text-xl font-bold mb-4">Head-to-Head Comparison</h2>
+                  
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select Player to Compare
+                    </label>
+                    <select
+                      value={selectedComparisonUser?.id || ''}
+                      onChange={(e) => loadComparisonUser(e.target.value)}
+                      className="w-full md:w-96 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">-- Select a player --</option>
+                      {allUsers
+                        .filter(u => u.id !== user.uid)
+                        .map(u => (
+                          <option key={u.id} value={u.id}>
+                            {u.displayName || u.email} {u.team ? `(${u.team})` : ''}
+                          </option>
+                        ))
+                      }
+                    </select>
+                  </div>
+
+                  {getComparisonData && (
+                    <>
+                      {/* Head-to-Head Record */}
+                      <div className="grid grid-cols-3 gap-4 mb-6">
+                        <div className="text-center p-4 bg-green-50 rounded-lg">
+                          <p className="text-3xl font-bold text-green-600">{getComparisonData.record.wins}</p>
+                          <p className="text-sm text-gray-600">Wins</p>
+                        </div>
+                        <div className="text-center p-4 bg-gray-50 rounded-lg">
+                          <p className="text-3xl font-bold text-gray-600">{getComparisonData.record.ties}</p>
+                          <p className="text-sm text-gray-600">Ties</p>
+                        </div>
+                        <div className="text-center p-4 bg-red-50 rounded-lg">
+                          <p className="text-3xl font-bold text-red-600">{getComparisonData.record.losses}</p>
+                          <p className="text-sm text-gray-600">Losses</p>
+                        </div>
+                      </div>
+
+                      {/* Average Comparison */}
+                      <div className="mb-6">
+                        <h3 className="font-semibold mb-3">Average Performance</h3>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <span className="font-medium">AM Quiz</span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-blue-600 font-semibold">{getComparisonData.averages.userAM}</span>
+                              <span className="text-gray-400">vs</span>
+                              <span className="text-gray-600 font-semibold">{getComparisonData.averages.compAM}</span>
+                              <span className={`text-sm ${parseFloat(getComparisonData.averages.amDiff) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                ({getComparisonData.averages.amDiff > 0 ? '+' : ''}{getComparisonData.averages.amDiff}%)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <span className="font-medium">PM Quiz</span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-blue-600 font-semibold">{getComparisonData.averages.userPM}</span>
+                              <span className="text-gray-400">vs</span>
+                              <span className="text-gray-600 font-semibold">{getComparisonData.averages.compPM}</span>
+                              <span className={`text-sm ${parseFloat(getComparisonData.averages.pmDiff) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                ({getComparisonData.averages.pmDiff > 0 ? '+' : ''}{getComparisonData.averages.pmDiff}%)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <span className="font-medium">Wordle Points</span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-blue-600 font-semibold">{getComparisonData.averages.userWordle}</span>
+                              <span className="text-gray-400">vs</span>
+                              <span className="text-gray-600 font-semibold">{getComparisonData.averages.compWordle}</span>
+                              <span className={`text-sm ${parseFloat(getComparisonData.averages.wordleDiff) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                ({getComparisonData.averages.wordleDiff > 0 ? '+' : ''}{getComparisonData.averages.wordleDiff}%)
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Daily Comparison Table */}
+                      <div className="overflow-x-auto">
+                        <h3 className="font-semibold mb-3">Daily Results</h3>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-2 px-2">Date</th>
+                              <th className="text-center py-2 px-2">You</th>
+                              <th className="text-center py-2 px-2">Them</th>
+                              <th className="text-center py-2 px-2">Result</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {getComparisonData.comparisons.slice(0, 10).map((comp, idx) => (
+                              <tr key={idx} className="border-b hover:bg-gray-50">
+                                <td className="py-2 px-2">{comp.date}</td>
+                                <td className="text-center py-2 px-2 font-semibold text-blue-600">
+                                  {comp.userTotal.toFixed(1)}
+                                </td>
+                                <td className="text-center py-2 px-2 font-semibold text-gray-600">
+                                  {comp.compTotal.toFixed(1)}
+                                </td>
+                                <td className="text-center py-2 px-2">
+                                  {comp.winner === 'you' ? '🏆' : comp.winner === 'them' ? '❌' : '🤝'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+
+                  {!selectedComparisonUser && (
+                    <p className="text-center text-gray-500 py-8">Select a player to begin comparison</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+
+{/* Team View */}
+{currentView === 'team' && (
+  <div className="space-y-6">
+    {!userTeam ? (
+      <div className="bg-white rounded-xl shadow-md p-6">
+        <h2 className="text-xl font-bold mb-4">Join a Team</h2>
+        <div className="grid grid-cols-2 gap-3">
+          {availableTeams.map(team => (
+            <button
+              key={team}
+              onClick={() => joinTeam(team)}
+              disabled={loading}
+              className="px-4 py-3 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition font-medium disabled:opacity-50"
+            >
+              {team}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : (
+      <>
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold">Team: {userTeam}</h2>
+            <button
+              onClick={() => joinTeam('')}
+              className="text-sm text-red-600 hover:text-red-700"
+            >
+              Leave Team
+            </button>
+          </div>
+          
+          {getTeamAverages().length > 0 && (
+            <div style={{ height: '300px' }}>
+              <BarChartComponent 
+                data={getTeamAverages()}
+                title="Team Performance Comparison (All-Time Averages)"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h3 className="text-lg font-bold mb-4">Team Standings (All-Time)</h3>
+          <div className="space-y-3">
+            {getTeamAverages().map((team, idx) => {
+              const teamTotal = (parseFloat(team.avgAM) + parseFloat(team.avgPM) + parseFloat(team.avgWordlePoints)).toFixed(1);
+              return (
+                <div key={team.label} className={`flex items-center justify-between p-4 rounded-lg ${
+                  team.label === userTeam ? 'bg-blue-50 border-2 border-blue-200' : 'bg-gray-50'
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</span>
+                    <div>
+                      <span className="font-semibold text-lg">{team.label}</span>
+                      <p className="text-sm text-gray-600">Total: {teamTotal} pts/day</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-6 text-sm">
+                    <span className="text-blue-600">AM: {team.avgAM}</span>
+                    <span className="text-green-600">PM: {team.avgPM}</span>
+                    <span className="text-amber-600">W: {team.avgWordlePoints}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h3 className="text-lg font-bold mb-4">{userTeam} Team Members (All-Time Averages)</h3>
+          <div className="space-y-2">
+            {getTeamLeaderboard(userTeam).map((player, idx) => (
+              <div key={player.userId} className={`flex items-center justify-between p-3 rounded-lg ${
+                player.userId === user.uid ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-sm text-gray-500">#{idx + 1}</span>
+                  <div>
+                    <span className="font-medium">{player.name}</span>
+                    {player.userId === user.uid && (
+                      <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">You</span>
+                    )}
+                    <p className="text-xs text-gray-500">{player.totalEntries} entries</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm">
+                    <span className="font-semibold text-purple-600">{player.avgTotal}</span>
+                    <span className="text-gray-500 ml-1">pts</span>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    AM: {player.avgAM} | PM: {player.avgPM} | W: {player.avgWordlePoints}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>
+    )}
+  </div>
+)}
+            {/* Leaderboard View */}
+            {currentView === 'leaderboard' && (
+              <div className="bg-white rounded-xl shadow-md p-6">
+                <h2 className="text-xl font-bold mb-4">Leaderboard</h2>
+                
+                <div className="flex gap-2 mb-6 flex-wrap">
+                  <button
+                    onClick={() => setSelectedLeaderboardTab('overall')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      selectedLeaderboardTab === 'overall'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Overall
+                  </button>
+                  <button
+                    onClick={() => setSelectedLeaderboardTab('am')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      selectedLeaderboardTab === 'am'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    AM Specialists
+                  </button>
+                  <button
+                    onClick={() => setSelectedLeaderboardTab('pm')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      selectedLeaderboardTab === 'pm'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    PM Specialists
+                  </button>
+                  <button
+                    onClick={() => setSelectedLeaderboardTab('wordle')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      selectedLeaderboardTab === 'wordle'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Wordle Masters
+                  </button>
+                  <button
+                    onClick={() => setSelectedLeaderboardTab('mostActive')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      selectedLeaderboardTab === 'mostActive'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Most Active
+                  </button>
+                  <button
+                    onClick={() => setSelectedLeaderboardTab('recentForm')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                      selectedLeaderboardTab === 'recentForm'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Recent Form
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-3 px-4">Rank</th>
+                        <th className="text-left py-3 px-4">Player</th>
+                        <th className="text-left py-3 px-4">Team</th>
+                        {selectedLeaderboardTab === 'overall' && (
+                          <>
+                            <th className="text-center py-3 px-4">Avg Total</th>
+                            <th className="text-center py-3 px-4">AM</th>
+                            <th className="text-center py-3 px-4">PM</th>
+                            <th className="text-center py-3 px-4">Wordle</th>
+                          </>
+                        )}
+                        {selectedLeaderboardTab === 'am' && (
+                          <th className="text-center py-3 px-4">Avg AM</th>
+                        )}
+                        {selectedLeaderboardTab === 'pm' && (
+                          <th className="text-center py-3 px-4">Avg PM</th>
+                        )}
+                        {selectedLeaderboardTab === 'wordle' && (
+                          <>
+                            <th className="text-center py-3 px-4">Wordle Points</th>
+                            <th className="text-center py-3 px-4">Avg Attempts</th>
+                          </>
+                        )}
+                        {selectedLeaderboardTab === 'mostActive' && (
+                          <th className="text-center py-3 px-4">Total Entries</th>
+                        )}
+                        {selectedLeaderboardTab === 'recentForm' && (
+                          <>
+                            <th className="text-center py-3 px-4">Last 7 Days</th>
+                            <th className="text-center py-3 px-4">Entries</th>
+                          </>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getLeaderboardByCategory(selectedLeaderboardTab).map((player, index) => (
+                        <tr 
+                          key={player.userId} 
+                          className={`border-b hover:bg-gray-50 ${player.userId === user.uid ? 'bg-blue-50' : ''}`}
+                        >
+                          <td className="py-3 px-4">
+                            {index === 0 && '🥇'}
+                            {index === 1 && '🥈'}
+                            {index === 2 && '🥉'}
+                            {index > 2 && (index + 1)}
+                          </td>
+                          <td className="py-3 px-4 font-medium">
+                            {player.name}
+                            {player.userId === user.uid && (
+                              <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">You</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-1 bg-gray-100 rounded text-xs">
+                              {player.team}
+                            </span>
+                          </td>
+                          {selectedLeaderboardTab === 'overall' && (
+                            <>
+                              <td className="py-3 px-4 text-center font-semibold text-purple-600">
+                                {player.avgTotal}
+                              </td>
+                              <td className="py-3 px-4 text-center">{player.avgAM}</td>
+                              <td className="py-3 px-4 text-center">{player.avgPM}</td>
+                              <td className="py-3 px-4 text-center">{player.avgWordlePoints}</td>
+                            </>
+                          )}
+                          {selectedLeaderboardTab === 'am' && (
+                            <td className="py-3 px-4 text-center font-semibold text-blue-600">
+                              {player.avgAM}
+                            </td>
+                          )}
+                          {selectedLeaderboardTab === 'pm' && (
+                            <td className="py-3 px-4 text-center font-semibold text-green-600">
+                              {player.avgPM}
+                            </td>
+                          )}
+                          {selectedLeaderboardTab === 'wordle' && (
+                            <>
+                              <td className="py-3 px-4 text-center font-semibold text-amber-600">
+                                {player.avgWordlePoints}
+                              </td>
+                              <td className="py-3 px-4 text-center text-sm text-gray-600">
+                                {player.avgWordle}
+                              </td>
+                            </>
+                          )}
+                          {selectedLeaderboardTab === 'mostActive' && (
+                            <td className="py-3 px-4 text-center font-semibold text-indigo-600">
+                              {player.totalEntries}
+                            </td>
+                          )}
+                          {selectedLeaderboardTab === 'recentForm' && (
+                            <>
+                              <td className="py-3 px-4 text-center font-semibold text-green-600">
+                                {player.last7DaysAvg}
+                              </td>
+                              <td className="py-3 px-4 text-center text-sm text-gray-600">
+                                {player.recentEntries}
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {leaderboard.length === 0 && (
+                    <p className="text-center text-gray-500 py-8">No entries yet</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Achievements View */}
+            {currentView === 'achievements' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-xl shadow-md p-6">
+                  <h2 className="text-xl font-bold mb-4">Your Achievements</h2>
+                  {userAchievements.length > 0 ? (
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {userAchievements.map((achievement, idx) => (
+                        <div key={idx} className="p-4 bg-gradient-to-r from-yellow-50 to-amber-50 border-2 border-yellow-200 rounded-lg">
+                          <div className="flex items-center gap-3">
+                            <span className="text-4xl">{achievement.icon}</span>
+                            <div>
+                              <h3 className="font-bold text-gray-800">{achievement.name}</h3>
+                              <p className="text-sm text-gray-600">{achievement.description}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-center text-gray-500 py-8">Keep playing to unlock achievements!</p>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-xl shadow-md p-6">
+                  <h3 className="text-lg font-bold mb-4">Available Achievements</h3>
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">🎯 Perfect AM</p>
+                      <p className="text-xs text-gray-500">Score 15/15 on AM Quiz</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">🎯 Perfect PM</p>
+                      <p className="text-xs text-gray-500">Score 15/15 on PM Quiz</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">🧠 Wordle Genius</p>
+                      <p className="text-xs text-gray-500">Solve Wordle in 1 attempt</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">🏆 Wordle Master</p>
+                      <p className="text-xs text-gray-500">Average ≤3.5 attempts</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">👑 Consistency King</p>
+                      <p className="text-xs text-gray-500">Very consistent scores (std dev &lt;3)</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">⭐ Elite Performer</p>
+                      <p className="text-xs text-gray-500">Average total &gt;35 points</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">💪 Dedicated</p>
+                      <p className="text-xs text-gray-500">10+ entries logged</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="font-semibold text-gray-700">🔥 Committed</p>
+                      <p className="text-xs text-gray-500">30+ entries logged</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+		{/* Team Comparison View */}
+{currentView === 'teamComparison' && (
+  <div className="space-y-6">
+    <div className="bg-white rounded-xl shadow-md p-6">
+      <h2 className="text-xl font-bold mb-6">Boys vs Girls - Head to Head</h2>
+      
+      {getTeamComparisonData ? (
+        <>
+          {/* Winner Banner */}
+          <div className="mb-6 p-6 bg-gradient-to-r from-yellow-50 to-amber-50 border-2 border-yellow-300 rounded-xl text-center">
+            <p className="text-sm text-gray-600 mb-2">Overall Leader</p>
+            <p className="text-4xl font-bold text-yellow-700">
+              🏆 {getTeamComparisonData.winner}
+            </p>
+            <p className="text-sm text-gray-600 mt-2">
+              Average: {getTeamComparisonData.winner === 'Boys' ? getTeamComparisonData.boys.avgTotal : getTeamComparisonData.girls.avgTotal} points per day
+            </p>
+          </div>
+
+          {/* Team Stats Cards */}
+          <div className="grid md:grid-cols-2 gap-4 mb-6">
+            <div className="p-6 bg-blue-50 border-2 border-blue-200 rounded-xl">
+              <h3 className="text-xl font-bold text-blue-700 mb-4">Boys Team</h3>
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Players:</span>
+                  <span className="font-semibold">{getTeamComparisonData.boys.playerCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Avg AM:</span>
+                  <span className="font-semibold text-blue-600">{getTeamComparisonData.boys.avgAM}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Avg PM:</span>
+                  <span className="font-semibold text-blue-600">{getTeamComparisonData.boys.avgPM}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Avg Wordle:</span>
+                  <span className="font-semibold text-blue-600">{getTeamComparisonData.boys.avgWordle}</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t-2 border-blue-200">
+                  <span className="text-gray-700 font-bold">Total:</span>
+                  <span className="font-bold text-blue-700 text-lg">{getTeamComparisonData.boys.avgTotal}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 bg-pink-50 border-2 border-pink-200 rounded-xl">
+              <h3 className="text-xl font-bold text-pink-700 mb-4">Girls Team</h3>
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Players:</span>
+                  <span className="font-semibold">{getTeamComparisonData.girls.playerCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Avg AM:</span>
+                  <span className="font-semibold text-pink-600">{getTeamComparisonData.girls.avgAM}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Avg PM:</span>
+                  <span className="font-semibold text-pink-600">{getTeamComparisonData.girls.avgPM}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Avg Wordle:</span>
+                  <span className="font-semibold text-pink-600">{getTeamComparisonData.girls.avgWordle}</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t-2 border-pink-200">
+                  <span className="text-gray-700 font-bold">Total:</span>
+                  <span className="font-bold text-pink-700 text-lg">{getTeamComparisonData.girls.avgTotal}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Category Breakdown */}
+          <div className="bg-white rounded-xl border p-6 mb-6">
+            <h3 className="font-semibold mb-4 text-lg">Category Breakdown</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="font-medium">AM Quiz</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-blue-600 font-semibold">{getTeamComparisonData.boys.avgAM}</span>
+                  <span className="text-gray-400">vs</span>
+                  <span className="text-pink-600 font-semibold">{getTeamComparisonData.girls.avgAM}</span>
+                  <span className={`text-sm px-2 py-1 rounded ${
+                    parseFloat(getTeamComparisonData.differences.amDiff) >= 0 
+                      ? 'bg-blue-100 text-blue-700' 
+                      : 'bg-pink-100 text-pink-700'
+                  }`}>
+                    {parseFloat(getTeamComparisonData.differences.amDiff) >= 0 ? 'Boys' : 'Girls'} +{Math.abs(parseFloat(getTeamComparisonData.differences.amDiff))}%
+                  </span>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="font-medium">PM Quiz</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-blue-600 font-semibold">{getTeamComparisonData.boys.avgPM}</span>
+                  <span className="text-gray-400">vs</span>
+                  <span className="text-pink-600 font-semibold">{getTeamComparisonData.girls.avgPM}</span>
+                  <span className={`text-sm px-2 py-1 rounded ${
+                    parseFloat(getTeamComparisonData.differences.pmDiff) >= 0 
+                      ? 'bg-blue-100 text-blue-700' 
+                      : 'bg-pink-100 text-pink-700'
+                  }`}>
+                    {parseFloat(getTeamComparisonData.differences.pmDiff) >= 0 ? 'Boys' : 'Girls'} +{Math.abs(parseFloat(getTeamComparisonData.differences.pmDiff))}%
+                  </span>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="font-medium">Wordle Points</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-blue-600 font-semibold">{getTeamComparisonData.boys.avgWordle}</span>
+                  <span className="text-gray-400">vs</span>
+                  <span className="text-pink-600 font-semibold">{getTeamComparisonData.girls.avgWordle}</span>
+                  <span className={`text-sm px-2 py-1 rounded ${
+                    parseFloat(getTeamComparisonData.differences.wordleDiff) >= 0 
+                      ? 'bg-blue-100 text-blue-700' 
+                      : 'bg-pink-100 text-pink-700'
+                  }`}>
+                    {parseFloat(getTeamComparisonData.differences.wordleDiff) >= 0 ? 'Boys' : 'Girls'} +{Math.abs(parseFloat(getTeamComparisonData.differences.wordleDiff))}%
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Visual Comparison Chart */}
+          <div className="bg-white rounded-xl border p-6">
+            <h3 className="font-semibold mb-4 text-lg">Visual Comparison</h3>
+            <div style={{ height: '300px' }}>
+              <BarChartComponent 
+                data={[
+                  {
+                    label: 'Boys',
+                    avgAM: getTeamComparisonData.boys.avgAM,
+                    avgPM: getTeamComparisonData.boys.avgPM,
+                    avgWordlePoints: getTeamComparisonData.boys.avgWordle
+                  },
+                  {
+                    label: 'Girls',
+                    avgAM: getTeamComparisonData.girls.avgAM,
+                    avgPM: getTeamComparisonData.girls.avgPM,
+                    avgWordlePoints: getTeamComparisonData.girls.avgWordle
+                  }
+                ]}
+                title="Boys vs Girls - All Categories"
+              />
+            </div>
+          </div>
+
+          {/* Top Performers from Each Team */}
+          <div className="grid md:grid-cols-2 gap-4 mt-6">
+            <div className="bg-blue-50 rounded-xl p-6 border-2 border-blue-200">
+              <h3 className="font-bold text-blue-700 mb-3">Top Boys</h3>
+              <div className="space-y-2">
+                {getTeamLeaderboard('Boys').slice(0, 5).map((player, idx) => (
+                  <div key={player.userId} className="flex justify-between items-center p-2 bg-white rounded">
+                    <span className="text-sm">
+                      {idx + 1}. {player.name}
+                    </span>
+                    <span className="font-semibold text-blue-600">{player.avgTotal}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-pink-50 rounded-xl p-6 border-2 border-pink-200">
+              <h3 className="font-bold text-pink-700 mb-3">Top Girls</h3>
+              <div className="space-y-2">
+                {getTeamLeaderboard('Girls').slice(0, 5).map((player, idx) => (
+                  <div key={player.userId} className="flex justify-between items-center p-2 bg-white rounded">
+                    <span className="text-sm">
+                      {idx + 1}. {player.name}
+                    </span>
+                    <span className="font-semibold text-pink-600">{player.avgTotal}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="text-center text-gray-500 py-8">Not enough data to compare teams yet. Both teams need at least one player with entries.</p>
+      )}
+    </div>
+  </div>
+)}
+        </div>
+      );
+    };
+
+	
+
+    ReactDOM.render(<QuizTracker />, document.getElementById('root'));
+  </script>
+</body>
+</html>
+
