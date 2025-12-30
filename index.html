@@ -286,7 +286,15 @@
       const [amScore, setAmScore] = useState('');
       const [pmScore, setPmScore] = useState('');
       const [wordleScore, setWordleScore] = useState('');
-      const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
+      const [entryDate, setEntryDate] = useState(() => {
+  const nzDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+  return nzDate; // Returns YYYY-MM-DD in NZ time
+});
       const [isEditingDate, setIsEditingDate] = useState(false);
       
       // User Data State
